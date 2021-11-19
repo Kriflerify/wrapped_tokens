@@ -28,3 +28,8 @@ Working repo for wrapped ERC20 -> Lamden token facilities
   * They provide the name of the contract they made. It is checked for adherence to the protocol.
   * Right now, the contract expects the operator to be the only one adding tokens. This is because there is no way to manage if people sabotage tokens with bad smart contracts somehow.
   * Assuming everything is good, the link is made. The address has to be whitelabeled on the Ethereum side by calling the correct function.
+
+### Testing
+``python3 -m unittest``
+or 
+``python3 -m unittest tests/lamden_bridge``
