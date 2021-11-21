@@ -72,13 +72,15 @@ def mint(ethereum_contract: str, amount: str, lamden_wallet: str):
 
     decimals = supported_tokens[ethereum_contract, 'decimals']
 
+    # should be moved into add_token (see comment at add_token 2.)
     assert decimals is not None, 'Unexpected decimal error'
 
     unpacked_amount = unpack_uint256(amount, decimals)
 
     token = I.import_module(supported_tokens[ethereum_contract])
 
-    assert I.enforce_interface(token, token_interface), 'Invalid token interface!'
+    # Unnecessary assertion, can never throw because add_token already checks this
+    # assert I.enforce_interface(token, token_interface), 'Invalid token interface!'
 
     token.mint(amount=unpacked_amount, to=lamden_wallet)
 
@@ -109,6 +111,11 @@ def burn(ethereum_contract: str, ethereum_address: str, lamden_address: str, amo
 
     return abi
 
+# 1. It is possible to add multiple ethereum_contracts to the same lamden_contract
+# 2. It is possible to leave decimals as None, which does not throw Exceptions at first. But when
+#    trying to mint, an Exception will be thrown. Then it will not be possible anymore to overwrite
+#    decimals or to call add_token with the same ethereum address anymore.
+# 3. It is possible to add impossible ethereum_contract (unlike pack_eth_address)
 @export
 def add_token(ethereum_contract: str, lamden_contract: str, decimals: int):
     assert supported_tokens[ethereum_contract] is None, 'Token already supported'

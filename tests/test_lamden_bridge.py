@@ -2,52 +2,31 @@
 import unittest
 
 from contracting.client import ContractingClient
-from contracting.execution.runtime import rt
-from contracting.stdlib import env
-from contracting.stdlib.bridge.hashing import sha3
-from contracting import config
+from tests.util import submit_compiled
+
 client = ContractingClient()
 
 ETH_TOKEN = "0xF08eF1668524a98893D97F16Ad134dA8cccefb03"
 ETH_ADDRESS = "0xEA674fdDe714fd979de3EdF0F56AA9716B898ec8"
 
 
-def submit_compiled(client, name, code_obj, owner=None, developer=None, args=None):
-    """Submits compiled code of a contract. We need to import currency but lamden masternodes only return 
-    compiled code. 
-    """
-    scope = env.gather()
-    scope.update({'__contract__': True})
-    scope.update(rt.env)
-
-    exec(code_obj, scope)
-
-    if args:
-        scope[config.INIT_FUNC_NAME](**args)
-    else:
-        scope[config.INIT_FUNC_NAME]()
-    
-
-    client.raw_driver.set_contract(name=name, code=code_obj, owner=owner,
-        overwrite=False, developer=developer)
-
 class TestLamdenBridge(unittest.TestCase):
     def setUp(self):
         self.c = client
         self.c.flush()
 
-        with open('tests/currency.py') as f:
+        with open("tests/contracts/currency.py") as f:
             compiled_code = f.read()
 
         submit_compiled(self.c, "currency", compiled_code, args={"vk": "OwnerOfCurrency"})
         self.currency = self.c.get_contract("currency")
 
-        with open('lamden/lamden_bridge.py') as f:
+        with open("lamden/lamden_bridge.py") as f:
             code = f.read()
             args = {"contract_address": ETH_TOKEN,
                 "decimals":18}
             self.c.submit(code, name="lamden_bridge", constructor_args=args)
-            self.l_bridge = self.c.get_contract('lamden_bridge')    
+            self.l_bridge = self.c.get_contract("lamden_bridge")    
 
     def tearDown(self):
         self.c.flush()
@@ -215,10 +194,10 @@ class TestLamdenBridge(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.l_bridge.run_private_function(f="pack_int", **case)
 
-    def getBalances(self):
+    def getBalances(self, *args):
         balances = {}
-        balances["lamden_bridge"] = self.currency.balance_of(account="lamden_bridge")
-        balances["user"] = self.currency.balance_of(account="user")
+        for a in args:
+            balances[a] = self.currency.balance_of(account=a)
         return balances
 
     def getNonce(self):
@@ -238,20 +217,20 @@ class TestLamdenBridge(unittest.TestCase):
                        arguments=["user2"],
                        value=100)
 
-        # Only 'user' has approved lamden_bridge
+        # Only "user" has approved lamden_bridge
         self.currency.approve(signer="user", amount=100, to="lamden_bridge")
 
         test_cases = [
-            ({'amount': 1, 'ethereum_address': ETH_ADDRESS}, 
+            ({"amount": 1, "ethereum_address": ETH_ADDRESS}, 
                 # "000000000000000000000000F08eF1668524a98893D97F16Ad134dA8cccefb030000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000EA674fdDe714fd979de3EdF0F56AA9716B898ec8"),
                 "2467d967d604f32992a2ac4e1ae03b9a86a2ac5069d22e0743e45ee89147319f"),
-            ({'amount': 10, 'ethereum_address': ETH_ADDRESS}, 
+            ({"amount": 10, "ethereum_address": ETH_ADDRESS}, 
                 # "000000000000000000000000F08eF1668524a98893D97F16Ad134dA8cccefb030000000000000000000000000000000000000000000000008ac7230489e800000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000EA674fdDe714fd979de3EdF0F56AA9716B898ec8"),
                 "5d3ae41b5df3d3932bf63f401477a244116155ee44308a80228ccb947803fb69"),
-            ({'amount': 0.5, 'ethereum_address': ETH_ADDRESS}, 
+            ({"amount": 0.5, "ethereum_address": ETH_ADDRESS}, 
                 # "000000000000000000000000F08eF1668524a98893D97F16Ad134dA8cccefb0300000000000000000000000000000000000000000000000006f05b59d3b200000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000EA674fdDe714fd979de3EdF0F56AA9716B898ec8"),
                 "f8fd422a9fb49671816e41452583dd90c8a2dd53ee251f64942e770cdaf684d2"),
-            ({'amount': 0.5, 'ethereum_address': ETH_ADDRESS}, 
+            ({"amount": 0.5, "ethereum_address": ETH_ADDRESS}, 
                 # "000000000000000000000000F08eF1668524a98893D97F16Ad134dA8cccefb0300000000000000000000000000000000000000000000000006f05b59d3b200000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000EA674fdDe714fd979de3EdF0F56AA9716B898ec8"),
                 "80960e2f94e9a066c101e948494f081ed33d93e899a7fb608925c4f49357bfb5"),
         ]
@@ -280,33 +259,110 @@ class TestLamdenBridge(unittest.TestCase):
             {"signer": "user3", "amount": 1000, "ethereum_address": ETH_ADDRESS}, 
         ]
 
+        relevant_actors = ["user", "lamden_bridge", self.c.signer]
+
         for case in test_cases:
-            balances = self.getBalances()
+            balances = self.getBalances(*relevant_actors)
             nonce = self.getNonce()
 
             result = self.l_bridge.deposit(signer="user", **(case[0]))
             self.assertEqual(result, case[1])
             
-            supposedBalances = dict(balances)
-            supposedBalances['user'] -= case[0]['amount']
-            supposedBalances['lamden_bridge'] += case[0]['amount']
-            self.assertEqual(self.getBalances(), supposedBalances)
+            supposed_Balances = dict(balances)
+            supposed_Balances["user"] -= case[0]["amount"]
+            supposed_Balances["lamden_bridge"] += case[0]["amount"]
+            self.assertEqual(self.getBalances(*relevant_actors), supposed_Balances)
 
-            supposedNonce = nonce + 1
-            currentNonce = self.getNonce()
-            self.assertEqual(currentNonce, supposedNonce)
+            supposed_Nonce = nonce + 1
+            current_Nonce = self.getNonce()
+            self.assertEqual(current_Nonce, supposed_Nonce)
 
         for case in fail_cases:
-            balances = self.getBalances()
-            nonce = self.getNonce()
-
             with self.assertRaises(BaseException):
                 result = self.l_bridge.deposit(signer="user", **case)
 
+    def test_withdraw(self):
+        # Inrease balance of "lamden_bridge" to pretend as if something is deposited
+        self.c.set_var(contract="currency",
+                       variable="balances",
+                       arguments=["lamden_bridge"],
+                       value=100)
+        # "user" has some tau
+        self.c.set_var(contract="currency",
+                       variable="balances",
+                       arguments=["user"],
+                       value=100)
+
+        # "user" has approved lamden_bridge
+        self.currency.approve(signer="user", amount=100, to="lamden_bridge")
+
+        test_cases = [
+            {"signer": self.c.signer, "amount": 1, "to": self.c.signer},
+            {"signer": self.c.signer, "amount": 10.0, "to": self.c.signer},
+            {"signer": self.c.signer, "amount": 10.5, "to": self.c.signer},
+            # Owner should also be allowed to send withdrawn tau to accounts other than himself
+            {"signer": self.c.signer, "amount": 10.5, "to": "foreigner"},
+        ]
+
+        fail_cases = [
+            # impossible amount
+            {"signer": self.c.signer, "amount": float("inf"), "to": self.c.signer},
+            {"signer": self.c.signer, "amount": -10, "to": self.c.signer},
+            {"signer": self.c.signer, "amount": 0.0, "to": self.c.signer},
+            {"signer": self.c.signer, "amount": None, "to": self.c.signer},
+            {"signer": self.c.signer, "amount": "text", "to": self.c.signer},
+            # impossible receipient
+            {"signer": self.c.signer, "amount": 0.0, "to": 0x10},
+            {"signer": self.c.signer, "amount": 0.0, "to": None}, 
+            # Non-owner tries to withdraw
+            {"signer": "foreigner", "amount": 0.0, "to": "user"},
+            {"signer": "user", "amount": 0.0, "to": "user"},
+            # Trying to withdraw more than available
+            {"signer": self.c.signer, "amount": 1000, "to": self.c.signer},
+        ]
+
+        relevant_actors = ["foreigner", "user", "lamden_bridge", self.c.signer]
+
+        for case in test_cases:
+            supposed_Balances = self.getBalances(*relevant_actors)
+            supposed_Nonce = self.getNonce()
+
+            self.l_bridge.withdraw(**case)
+            
+            supposed_Balances["lamden_bridge"] -= case["amount"]
+            supposed_Balances[case["to"]] += case["amount"]
+            self.assertEqual(self.getBalances(*relevant_actors), supposed_Balances)
+
             currentNonce = self.getNonce()
-            currentBalances = self.getBalances()
-            self.assertEqual(currentNonce, nonce) 
-            self.assertEqual(currentBalances, balances) 
+            self.assertEqual(currentNonce, supposed_Nonce)
+
+        for i, case in enumerate(fail_cases):
+            with self.assertRaises(BaseException, msg=f"Failure Case {i}"):
+                self.l_bridge.withdraw(**case)
+
+    def test_post_proof(self):
+        test_cases = [
+            {"signer": self.c.signer, "hashed_abi": "abc", "signed_abi": "def"},
+            {"signer": self.c.signer, "hashed_abi": "ghi", "signed_abi": "ijk"},
+        ]
+
+        fail_cases = [
+            # Non-owner tries to post proof
+            {"signer": "foreigner", "hashed_abi": "abc", "signed_abi": "def"},
+        ]
+
+        # Tests don't fail when owner posts empty proofs or overwrites proofs
+
+        for case in test_cases:
+            self.l_bridge.post_proof(**case)
+            
+            posted_proof = self.l_bridge.quick_read(variable="proofs", key=case["hashed_abi"])
+            self.assertEqual(posted_proof, case["signed_abi"])
+
+        for i, case in enumerate(fail_cases):
+            with self.assertRaises(BaseException, msg=f"Failure Case {i}"):
+                self.l_bridge.post_proof(**case)
+
 
 if __name__ == '__main__':
     unittest.main()
