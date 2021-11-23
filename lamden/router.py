@@ -86,6 +86,7 @@ def mint(ethereum_contract: str, amount: str, lamden_wallet: str):
 
 
 
+# If ethereum_address is invalid, exception gets thrown, but balances are still changed
 @export
 def burn(ethereum_contract: str, ethereum_address: str, lamden_address: str, amount: float):
     assert ctx.caller == owner.get(), 'Only owner can call!'
