@@ -113,9 +113,9 @@ def burn(ethereum_contract: str, ethereum_address: str, lamden_address: str, amo
 
 # 1. It is possible to add multiple ethereum_contracts to the same lamden_contract
 # 2. It is possible to leave decimals as None, which does not throw Exceptions at first. But when
-#    trying to mint, an Exception will be thrown. Then it will not be possible anymore to overwrite
-#    decimals or to call add_token with the same ethereum address anymore.
-# 3. It is possible to add impossible ethereum_contract (unlike pack_eth_address)
+#    trying to mint (or burn), an Exception will be thrown. Then it will not be possible anymore 
+#    to overwrite decimals or to call add_token with the same ethereum address anymore.
+# 3. It is possible to add impossible ethereum_contract address (unlike pack_eth_address)
 @export
 def add_token(ethereum_contract: str, lamden_contract: str, decimals: int):
     assert supported_tokens[ethereum_contract] is None, 'Token already supported'

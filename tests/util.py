@@ -31,9 +31,12 @@ def getKeys(client, contract_name, variable_name):
     if contract:
         keys = contract.keys()
         raw_keys = [k[k.find(":")+1:] for k in keys if f"{contract_name}.{variable_name}" in k]
-        return raw_keys
+        return [k for k in raw_keys if ":" not in k]
+
 
 def getAllHashValues(client, contract_name, variable_name):
+    """Return a python dict with all key-value pairs stored in a given Hash object of a contract
+    """
     keys = getKeys(client, contract_name, variable_name)
     if not keys:
         return {}
@@ -44,4 +47,4 @@ def getAllHashValues(client, contract_name, variable_name):
     return values
 
 def randomEthAddress():
-    return "0x" + randbytes(40).hex()
+    return "0x" + randbytes(20).hex()

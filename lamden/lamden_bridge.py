@@ -74,6 +74,7 @@ def withdraw(amount: float, to: str):
 
 
 # Arguments had no types
+# It is possible to overwrite proofs
 @export
 def post_proof(hashed_abi: str, signed_abi: str):
     assert ctx.caller == owner.get(), 'Only owner can call!'

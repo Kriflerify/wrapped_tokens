@@ -11,15 +11,45 @@ client = ContractingClient()
 # Necessary so that token contract allows router to mint
 ROUTER_NAME = "con_clearing_house_62"
 
-def calcBalanceAfterMint(token, token_name, case, decimals):
-    old_balances = getAllHashValues(token, token_name, "balances")
-    amount = int(case["mint"]["amount"], 16) / (10 ** decimals)
-    account = case["mint"]["lamden_wallet"]
-    if account in old_balances:
-        old_balances[account] += amount
-    else: 
-        old_balances[account] = decimal.ContractingDecimal(amount)
-    return old_balances
+
+def calcBalances(client, token_name, transactions):
+    balances = getAllHashValues(client, token_name, "balances")
+    # pdb.set_trace()
+    for k, v in balances.items():
+        if type(v) != decimal.ContractingDecimal:
+            balances[k] = decimal.ContractingDecimal(v)
+
+    for account, amount in transactions.items():
+        if type(amount) != decimal.ContractingDecimal:
+            amount = decimal.ContractingDecimal(amount)
+        if account in balances:
+            balances[account] += amount
+        else: 
+            balances[account] = amount
+    return balances
+
+def calcBalanceAfterMint(client, token_name, case, decimals):
+    amount = int(case["amount"], 16) / (10 ** decimals)
+    account = case["lamden_wallet"]
+    transactions = {account: amount}
+    return calcBalances(client, token_name, transactions)
+
+def calcBalancesAfterBurn(client, token_name, case):
+    amount = case["amount"]
+    account = case["lamden_address"]
+    if type(amount)==str:
+        transactions = {account: "-" + amount, ROUTER_NAME: amount}
+    else:
+        transactions = {account: -amount, ROUTER_NAME: amount}
+    return calcBalances(client, token_name, transactions)
+
+def incrementNonces(nonces, *accounts):
+    for acc in accounts:
+        if acc in nonces:
+            nonces[acc] += 1
+        else:
+            nonces[acc] = 1
+    return nonces
 
 class TestRouter(unittest.TestCase):
     def setUp(self):
@@ -31,7 +61,6 @@ class TestRouter(unittest.TestCase):
             self.c.submit(code, name=ROUTER_NAME)
             self.router = self.c.get_contract(ROUTER_NAME)    
 
-        # Save code of a token so that we can create tokens later
         with open("lamden/token.py") as f:
             self.token_code = f.read()
             self.c.submit(self.token_code, "token1")
@@ -167,7 +196,7 @@ class TestRouter(unittest.TestCase):
                     decimals = case["add_token"]["decimals"]
                     self.router.add_token(**(case["add_token"]))
 
-                supposed_balances = calcBalanceAfterMint(self.c, "token1", case, decimals)
+                supposed_balances = calcBalanceAfterMint(self.c, "token1", case["mint"], decimals)
                 nonces_before = getAllHashValues(self.c, ROUTER_NAME, "nonces")
 
                 self.router.mint(**case["mint"])
@@ -278,6 +307,88 @@ class TestRouter(unittest.TestCase):
                 nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
                 self.assertEqual(nonces_before, nonces_after)
                 self.assertEqual(balances_before, balances_after)
+            
+
+class TestBurn(unittest.TestCase):
+    def setUp(self):
+        self.maxDiff = None
+        self.c = client
+        self.c.flush()
+
+        with open("lamden/router.py") as f:
+            code = f.read()
+            self.c.submit(code, name=ROUTER_NAME)
+            self.router = self.c.get_contract(ROUTER_NAME)    
+
+        with open("lamden/token.py") as f:
+            self.token_code = f.read()
+            self.c.submit(self.token_code, "token1")
+            self.token1 = self.c.get_contract("token1")
+
+        self.token1.quick_write(variable="balances", key="user", value=decimal.ContractingDecimal(100))
+        self.token1.approve(signer="user", amount=100, to=ROUTER_NAME)
+
+        self.ETH_TOKEN1 = "0x1111111111111111111111111111111111111111"
+        self.router.add_token(ethereum_contract=self.ETH_TOKEN1, lamden_contract="token1",
+            decimals=18)
+
+        self.balances = getAllHashValues(self.c, "token1", "balances")
+        self.nonces = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+        self.approved = decimal.ContractingDecimal(100)
+
+    def testBurn(self):
+        self.ETH_ADDRESS = "0x2222222222222222222222222222222222222222"
+        test_cases=[
+            {"burn":
+                {"ethereum_contract": self.ETH_TOKEN1, "ethereum_address": self.ETH_ADDRESS,
+                "lamden_address":"user", "amount": 10},
+            "abi":
+                "0"*24 + self.ETH_TOKEN1[2:] +
+                "0000000000000000000000000000000000000000000000008ac7230489e80000" + 
+                "0000000000000000000000000000000000000000000000000000000000000001" + 
+                "0"*24 + self.ETH_ADDRESS[2:]},
+            {"burn":
+                {"ethereum_contract": self.ETH_TOKEN1, "ethereum_address": self.ETH_ADDRESS,
+                "lamden_address":"user", "amount": 10.005},
+            "abi":
+                "0"*24 + self.ETH_TOKEN1[2:] +
+                "0000000000000000000000000000000000000000000000008ad8e67dc1c88000" + 
+                "0000000000000000000000000000000000000000000000000000000000000002" +
+                "0"*24 + self.ETH_ADDRESS[2:]},
+            {"burn":
+                {"ethereum_contract": self.ETH_TOKEN1, "ethereum_address": self.ETH_ADDRESS,
+                "lamden_address":"user", "amount": decimal.ContractingDecimal("10.000000000000000001")},
+            "abi":
+                "0"*24 + self.ETH_TOKEN1[2:] +
+                "0000000000000000000000000000000000000000000000008ac7230489e80001" + 
+                "0000000000000000000000000000000000000000000000000000000000000003" +
+                "0"*24 + self.ETH_ADDRESS[2:]},
+            {"burn":
+                {"ethereum_contract": self.ETH_TOKEN1, "ethereum_address": self.ETH_ADDRESS,
+                "lamden_address":"user", "amount": decimal.ContractingDecimal("10.0000000000000000001")},
+            "abi":
+                "0"*24 + self.ETH_TOKEN1[2:] +
+                "0000000000000000000000000000000000000000000000008ac7230489e80000" + 
+                "0000000000000000000000000000000000000000000000000000000000000004" +
+                "0"*24 + self.ETH_ADDRESS[2:]},
+        ]
+
+        for i,case in enumerate(test_cases):
+            with self.subTest(i=i):
+                # TODO check approvals in token contract going down
+                self.balances = calcBalancesAfterBurn(self.c, "token1", case["burn"])
+                self.nonces = incrementNonces(self.nonces, case["burn"]["ethereum_address"])
+                self.approved -= case["burn"]["amount"]
+
+                abi = self.router.burn(**(case["burn"])) 
+                self.assertEqual(abi, case["abi"])
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances:user")
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approvals, approvals_after)
 
 if __name__ == '__main__':
     unittest.main()
