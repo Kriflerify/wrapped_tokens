@@ -80,7 +80,7 @@ def mint(ethereum_contract: str, amount: str, lamden_wallet: str):
     token = I.import_module(supported_tokens[ethereum_contract])
 
     # Unnecessary assertion, can never throw because add_token already checks this
-    # assert I.enforce_interface(token, token_interface), 'Invalid token interface!'
+    assert I.enforce_interface(token, token_interface), 'Invalid token interface!'
 
     token.mint(amount=unpacked_amount, to=lamden_wallet)
 

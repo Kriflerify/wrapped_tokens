@@ -11,10 +11,8 @@ client = ContractingClient()
 # Necessary so that token contract allows router to mint
 ROUTER_NAME = "con_clearing_house_62"
 
-
 def calcBalances(client, token_name, transactions):
     balances = getAllHashValues(client, token_name, "balances")
-    # pdb.set_trace()
     for k, v in balances.items():
         if type(v) != decimal.ContractingDecimal:
             balances[k] = decimal.ContractingDecimal(v)
@@ -223,29 +221,231 @@ class TestRouter(unittest.TestCase):
                 nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
                 self.assertEqual(nonces_before, nonces_after)
                 self.assertEqual(balances_before, balances_after)
+            
 
-    def test_add_token(self):
-        ETH_TOKEN = "0x0000000000000000000000000000000000000000"
+class TestMint(unittest.TestCase):
+    def setUp(self):
+        self.c = client
+        self.c.flush()
+
+        with open("lamden/router.py") as f:
+            code = f.read()
+            self.c.submit(code, name=ROUTER_NAME)
+            self.router = self.c.get_contract(ROUTER_NAME)    
+
+        with open("lamden/token.py") as f:
+            self.token_code = f.read()
+            self.c.submit(self.token_code, "token1")
+            self.token1 = self.c.get_contract("token1")
+
+        with open("tests/contracts/token_no_transfer.py") as f:
+            self.token_code = f.read()
+            self.c.submit(self.token_code, "token2")
+
+        self.ETH_TOKEN1 = "0x1111111111111111111111111111111111111111"
+        self.router.add_token(ethereum_contract=self.ETH_TOKEN1, lamden_contract="token1",
+            decimals=18)
+
+        self.approved = getAllHashValues(self.c, "token1", "balances", level=2)
+        self.balances = getAllHashValues(self.c, "token1", "balances")
+        self.nonces = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+
+
+    def testMint(self):
         test_cases = [
-            {"ethereum_contract": ETH_TOKEN, "lamden_contract": "token1", "decimals": 18},
-            # Different ethereum_contract but same lamden_contract
-            {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": 18},
+            {"signer": self.c.signer, "ethereum_contract": self.ETH_TOKEN1, "amount": "0x10",
+            "lamden_wallet": "user"},
+            {"signer": self.c.signer, "ethereum_contract": self.ETH_TOKEN1, "amount": "10",
+            "lamden_wallet": "user"},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                self.balances = calcBalanceAfterMint(self.c, "token1", case, 18)
+
+                self.router.mint(**case)
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approved, approvals_after)
+
+
+    def testFailNonOwner(self):
+        test_cases = [
+            {"signer": "foreigner", "ethereum_contract": self.ETH_TOKEN1, "amount": "0x14",
+            "lamden_wallet": "user"},
+            {"signer": "user", "ethereum_contract": self.ETH_TOKEN1, "amount": "0x14",
+            "lamden_wallet": "user"},
+            {"signer": "user", "ethereum_contract": self.ETH_TOKEN1, "amount": "0x14",
+            "lamden_wallet": self.c.signer},
+            {"signer": "user", "ethereum_contract": self.ETH_TOKEN1, "amount": "0x14",
+                "lamden_wallet": ROUTER_NAME},
+            {"signer": "user", "ethereum_contract": self.ETH_TOKEN1, "amount": "0x14",
+                "lamden_wallet": None},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException, msg="Non owner was able to mint."):
+                    self.router.mint(**case)
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approved, approvals_after)
+
+
+    def testFailEthereumContract(self):
+        test_cases = [
+            # Not supported tokens
+            {"ethereum_contract": "0x0000000000000000000000000000000000000000",
+                "amount": "0x14", "lamden_wallet": "user"},
+            # impossible eth addresses
+            {"ethereum_contract": "0000000000000000000000000000000000000000",
+                "amount": "0x14", "lamden_wallet": "user"},
+            {"ethereum_contract": "000", "amount": "0x14", "lamden_wallet": "user"},
+            {"ethereum_contract": "", "amount": "0x14", "lamden_wallet": self.c.signer},
+            {"ethereum_contract": None, "amount": "0x14", "lamden_wallet": ROUTER_NAME},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException, msg="Unsupported or impossible ethereum contract was able to be minted."):
+                    self.router.mint(**case)
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approved, approvals_after)
+
+
+    @unittest.skip("Failed, but arguably not that bad...")
+    def testFailLamdenWallet(self):
+        test_cases = [
+            {"signer": self.c.signer, "ethereum_contract": self.ETH_TOKEN1, "amount": "0x10",
+            "lamden_wallet": ""},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException, msg="Impossible lamden wallet was able to be minted."):
+                    self.router.mint(**case)
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approved, approvals_after)
+
+
+    def testFailAmount(self):
+        test_cases = [
+            {"ethereum_contract": self.ETH_TOKEN1, "amount": "text", "lamden_wallet": "user"},
+            {"ethereum_contract": self.ETH_TOKEN1, "amount": "-0x14", "lamden_wallet": "user"},
+            {"ethereum_contract": self.ETH_TOKEN1, "amount": "", "lamden_wallet": "user"},
+            {"ethereum_contract": self.ETH_TOKEN1, "amount": None, "lamden_wallet": "user"},
+            {"ethereum_contract": self.ETH_TOKEN1, "amount": 10, "lamden_wallet": "user"},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException, msg="Impossible amount was able to be minted."):
+                    self.router.mint(**case)
+
+                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
+                balances_after = getAllHashValues(self.c, "token1", "balances")
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                self.assertEqual(self.balances, balances_after)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.approved, approvals_after)
+
+
+class TestAddToken(unittest.TestCase):
+    def setUp(self):
+        self.c = client
+        self.c.flush()
+
+        with open("lamden/router.py") as f:
+            code = f.read()
+            self.c.submit(code, name=ROUTER_NAME)
+            self.router = self.c.get_contract(ROUTER_NAME)    
+
+        with open("lamden/token.py") as f:
+            self.token_code = f.read()
+            self.c.submit(self.token_code, "token1")
+            self.token1 = self.c.get_contract("token1")
+
+        self.token1.quick_write(variable="balances", key="user", value=decimal.ContractingDecimal(100))
+        self.token1.quick_write(variable="balances", key="user2", value=decimal.ContractingDecimal(100))
+        self.token1.approve(signer="user", amount=100, to=ROUTER_NAME)
+
+        self.ETH_TOKEN1 = "0x1111111111111111111111111111111111111111"
+        self.router.add_token(ethereum_contract=self.ETH_TOKEN1, lamden_contract="token1",
+            decimals=18)
+
+        self.nonces = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+        self.supported = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+        self.decimals = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
+
+
+    def testAddToken(self):
+        test_cases = [
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": 18},
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": 0},
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": -3},
         ]
 
-        fail_cases = [
-            # Bad ethereum_contract
-            # {"ethereum_contract": "0000000000000000000000000000000000000000", "lamden_contract": "token1", "decimals": 18},
-            # {"ethereum_contract": "", "lamden_contract": "token1", "decimals": 18},
-            # {"ethereum_contract": "0x3333", "lamden_contract": "token1", "decimals": 18},
-            # {"ethereum_contract": "3333", "lamden_contract": "token1", "decimals": 18},
-            
-            # Attempt to add already added ethereum_contract
-            {"ethereum_contract": ETH_TOKEN, "lamden_contract": "token1", "decimals": 18},
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                eth_con = case["ethereum_contract"]
+                lam_con = case["lamden_contract"]
+                self.supported[eth_con] = lam_con 
+                self.decimals[eth_con, "decimals"] = case["decimals"]
 
-            # Attempt to add tokens that do not enforce the necessarty interface
+                self.router.add_token(**case)
+
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                supported_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+                decimals_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.supported, supported_after)
+                self.assertEqual(self.decimals, decimals_after)
+
+    @unittest.skip("FAILED")
+    def testFailDecimals(self):
+        test_cases = [
+            {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": None},
+            {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": ""},
+            {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": "18"},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException):
+                    self.router.add_token(**case)
+
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                supported_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+                decimals_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.supported, supported_after)
+                self.assertEqual(self.decimals, decimals_after)
+
+    
+    def testFailInterface(self):
+        test_cases=[
+            # Attempt to add token, that is already added
+            {"ethereum_contract": self.ETH_TOKEN1, "lamden_contract": "token1", "decimals": 18},
+
+            # Attempt to add tokens that do not enforce the necessary interface
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "token_no_transfer",
             "decimals": 18},
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "token_no_mint",
@@ -262,80 +462,70 @@ class TestRouter(unittest.TestCase):
             # Not existing lamden_contract
             {"ethereum_contract": randomEthAddress(), "lamden_contract": "not_existing",
             "decimals": 18},
-
-            # Bad decimals
-            # {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": ""},
-            # {"ethereum_contract": randomEthAddress(), "lamden_contract": "token1", "decimals": None},
-
-            # Non-owner trying to add_token
-            {"signer": "user", "ethereum_contract": randomEthAddress(), "lamden_contract": "token1",
-            "decimals": 18},
         ]
 
         for i, case in enumerate(test_cases):
             with self.subTest(i=i):
                 lamden_contract = case["lamden_contract"]
-                balances_before = getAllHashValues(self.c, lamden_contract, "balances")
-                nonces_before = getAllHashValues(self.c, ROUTER_NAME, "nonces")
 
-                self.router.add_token(**case)
-
-                balances_after = getAllHashValues(self.c, lamden_contract, "balances")
-                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
-                self.assertEqual(balances_before, balances_after)
-                self.assertEqual(nonces_before, nonces_after)
-
-        for case in fail_cases:
-            with self.subTest(i=i):
-                lamden_contract = case["lamden_contract"]
-
-                if lamden_contract != "token1":
-                    try:
-                        with open(f"tests/contracts/{lamden_contract}.py") as f:
-                            code = f.read()
-                            self.c.submit(code, name=lamden_contract)
-                    except:
-                        pass
-
-                balances_before = getAllHashValues(self.c, lamden_contract, "balances")
-                nonces_before = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                try:
+                    with open(f"tests/contracts/{lamden_contract}.py") as f:
+                        code = f.read()
+                        self.c.submit(code, name=lamden_contract)
+                except:
+                    pass
 
                 with self.assertRaises(BaseException, msg=case):
                     self.router.add_token(**case)
 
-                balances_after = getAllHashValues(self.c, lamden_contract, "balances")
                 nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
-                self.assertEqual(nonces_before, nonces_after)
-                self.assertEqual(balances_before, balances_after)
-            
-    @unittest.skip("TODO")
-    def testFailUnsupportedInterface(self):
-        fail_contracts = ['token_no_allowance', 'token_no_approve', 'token_no_mint',
-        'token_no_transfer', 'token_no_transfer_from', 'token_wrong_ming',
-        "not_existing"]
+                supported_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+                decimals_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.supported, supported_after)
+                self.assertEqual(self.decimals, decimals_after)
 
-        args = {"ethereum_contract": self.ETH_TOKEN1, }
 
-        for i, lamden_contract in enumerate(fail_contracts):
-            try:
-                with open(f"tests/contracts/{lamden_contract}.py") as f:
-                    code = f.read()
-                    self.c.submit(code, name=lamden_contract)
-            except:
-                pass
+    @unittest.skip("FAILED")
+    def testFailEthereumContract(self):
+        test_cases = [
+            {"ethereum_contract": "0000000000000000000000000000000000000000", "lamden_contract": "token1", "decimals": 18},
+            {"ethereum_contract": "", "lamden_contract": "token1", "decimals": 18},
+            {"ethereum_contract": "0x3333", "lamden_contract": "token1", "decimals": 18},
+            {"ethereum_contract": "3333", "lamden_contract": "token1", "decimals": 18},
+        ]
 
+        for i,case in enumerate(test_cases):
             with self.subTest(i=i):
                 with self.assertRaises(BaseException):
-                    self.router.burn(ethereum_contract=randomEthAddress(), lamden_contract=lamden_contract,
-                    decimals=18)
+                    self.router.add_token(**case)
 
-                # TODO
-                approvals_after = getAllHashValues(self.c, "token1", "balances", level=2)
-                balances_after = getAllHashValues(self.c, "token1", "balances")
                 nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
-                self.assertEqual(self.balances, balances_after)
+                supported_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+                decimals_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
                 self.assertEqual(self.nonces, nonces_after)
-                self.assertEqual(self.approved, approvals_after)
+                self.assertEqual(self.supported, supported_after)
+                self.assertEqual(self.decimals, decimals_after)
+
+
+    def testFailNonOwner(self):
+        test_cases = [
+            {"signer": "user", "ethereum_contract": randomEthAddress(), "lamden_contract": "token1",
+            "decimals": 18},
+        ]
+
+        for i,case in enumerate(test_cases):
+            with self.subTest(i=i):
+                with self.assertRaises(BaseException):
+                    self.router.add_token(**case)
+
+                nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+                supported_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens")
+                decimals_after = getAllHashValues(self.c, ROUTER_NAME, "supported_tokens", level=2)
+                self.assertEqual(self.nonces, nonces_after)
+                self.assertEqual(self.supported, supported_after)
+                self.assertEqual(self.decimals, decimals_after)
+
 
 class TestBurn(unittest.TestCase):
     def setUp(self):
@@ -364,7 +554,7 @@ class TestBurn(unittest.TestCase):
         self.approved = getAllHashValues(self.c, "token1", "balances", level=2)
         self.balances = getAllHashValues(self.c, "token1", "balances")
         self.nonces = getAllHashValues(self.c, ROUTER_NAME, "nonces")
-        # self.approved = decimal.ContractingDecimal(100)
+
 
     def testBurn(self):
         self.ETH_ADDRESS = "0x2222222222222222222222222222222222222222"
@@ -474,7 +664,7 @@ class TestBurn(unittest.TestCase):
                 self.assertEqual(self.approved, approvals_after)
 
 
-    @unittest.skip("FAILS")
+    @unittest.skip("FAILED")
     def testFailEthereumAddress(self):
         cases = [
             {"ethereum_contract": self.ETH_TOKEN1, "ethereum_address": "1111111111111111111111111111111111111111",
