@@ -1,8 +1,6 @@
 #tests/test_router.py
 import unittest
-import pdb
 from contracting.client import ContractingClient
-from contracting.stdlib.bridge.hashing import sha3
 from tests.util import getAllHashValues, randomEthAddress
 from contracting.stdlib.bridge import decimal
 
@@ -743,6 +741,52 @@ class TestBurn(unittest.TestCase):
                 self.assertEqual(self.nonces, nonces_after)
                 self.assertEqual(self.approved, approvals_after)
 
-        
+
+class TestPostProof(unittest.TestCase):
+    def setUp(self):
+        self.c = client
+        self.c.flush()
+
+        with open("lamden/router.py") as f:
+            code = f.read()
+            self.c.submit(code, name=ROUTER_NAME)
+            self.router = self.c.get_contract(ROUTER_NAME)    
+
+        self.nonces = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+        self.proofs = getAllHashValues(self.c, ROUTER_NAME, "proofs")
+
+    def testPostProof(self):
+        test_cases = [
+            {"hashed_abi": "text", "signed_abi": "random_text"},
+            {"hashed_abi": "other text", "signed_abi": "signature"},
+        ]
+
+        for i, case in enumerate(test_cases):
+            self.proofs[case["hashed_abi"]] = case["signed_abi"]
+            self.router.post_proof(**case)
+
+            nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+            proofs_after = getAllHashValues(self.c, ROUTER_NAME, "proofs")
+            self.assertEqual(self.proofs, proofs_after)
+            self.assertEqual(self.nonces, nonces_after)
+
+
+    def testFailNonOwner(self):
+        test_cases = [
+            {"signer": "user", "hashed_abi": "text", "signed_abi": "random_text"},
+            {"signer": "foreigner", "hashed_abi": "other text", "signed_abi": "signature"},
+        ]
+
+        for i, case in enumerate(test_cases):
+            with self.assertRaises(BaseException):
+                self.router.post_proof(**case)
+
+            nonces_after = getAllHashValues(self.c, ROUTER_NAME, "nonces")
+            proofs_after = getAllHashValues(self.c, ROUTER_NAME, "proofs")
+            self.assertEqual(self.proofs, proofs_after)
+            self.assertEqual(self.nonces, nonces_after)
+
+       
+
 if __name__ == '__main__':
     unittest.main()
